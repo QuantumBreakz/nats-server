@@ -31,6 +31,7 @@ import (
 var (
 	pdh                            = windows.NewLazySystemDLL("pdh.dll")
 	winPdhOpenQuery                = pdh.NewProc("PdhOpenQuery")
+	winPdhCloseQuery               = pdh.NewProc("PdhCloseQuery")
 	winPdhAddCounter               = pdh.NewProc("PdhAddCounterW")
 	winPdhCollectQueryData         = pdh.NewProc("PdhCollectQueryData")
 	winPdhGetFormattedCounterValue = pdh.NewProc("PdhGetFormattedCounterValue")
@@ -42,7 +43,7 @@ func init() {
 		panic(err)
 	}
 	for _, p := range []*windows.LazyProc{
-		winPdhOpenQuery, winPdhAddCounter, winPdhCollectQueryData,
+		winPdhOpenQuery, winPdhCloseQuery, winPdhAddCounter, winPdhCollectQueryData,
 		winPdhGetFormattedCounterValue, winPdhGetFormattedCounterArray,
 	} {
 		if err := p.Find(); err != nil {
@@ -121,6 +122,10 @@ func pdhOpenQuery(datasrc *uint16, userdata uint32, query *PDH_HQUERY) error {
 	return nil
 }
 
+func pdhCloseQuery(hQuery PDH_HQUERY) {
+	winPdhCloseQuery.Call(uintptr(hQuery))
+}
+
 func pdhCollectQueryData(hQuery PDH_HQUERY) error {
 	r0, _, _ := winPdhCollectQueryData.Call(uintptr(hQuery))
 	if r0 != 0 {
@@ -189,6 +194,14 @@ func initCounters() (err error) {
 	if err := pdhOpenQuery(&source, 0, &pcHandle); err != nil {
 		return err
 	}
+	// Close the query, and the counters added to it, if any later step
+	// fails, as we will open a new one on the next call.
+	defer func() {
+		if err != nil {
+			pdhCloseQuery(pcHandle)
+			pcHandle = 0
+		}
+	}()
 
 	// setup the performance counters, search for all server instances
 	name := fmt.Sprintf("%s*", getProcessImageName())
